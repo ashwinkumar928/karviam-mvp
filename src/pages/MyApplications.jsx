@@ -5,7 +5,7 @@ import API_URL from "../api";
 import "./MyApplications.css";
 import "./InternalPages.css";
 
-function MyApplications() {
+function MyApplications({ fixedStatus }) {
   const token = localStorage.getItem("kaamonToken");
 
   const [statusFilter, setStatusFilter] = useState("all");
@@ -117,8 +117,6 @@ function MyApplications() {
 
     if (token) {
       loadApplications();
-    } else {
-      setLoading(false);
     }
 
   }, [token]);
@@ -217,6 +215,9 @@ function MyApplications() {
     }
   }
 
+  const activeStatus = fixedStatus || statusFilter;
+  const visibleApplications = applications.filter(application => activeStatus === "all" || application.status === activeStatus);
+
   // ==============================
   // AUTH CHECK
   // ==============================
@@ -271,7 +272,7 @@ function MyApplications() {
         )}
 
         {!error &&
-          applications.length === 0 && (
+          !fixedStatus && applications.length === 0 && (
             <div className="no-applications">
 
               <span className="internal-empty-icon" aria-hidden="true">&nearr;</span>
@@ -289,17 +290,22 @@ function MyApplications() {
             </div>
           )}
 
-        <div className="internal-filter-tabs" role="group" aria-label="Filter applications by status">
+        {!fixedStatus && <div className="internal-filter-tabs" role="group" aria-label="Filter applications by status">
           {["all", "pending", "accepted", "completed", "rejected"].map((status) => (
             <button type="button" key={status} aria-pressed={statusFilter === status} onClick={() => setStatusFilter(status)}>{status}</button>
           ))}
-        </div>
-        {!error && applications.length > 0 && !applications.some(a => statusFilter === "all" || a.status === statusFilter) && (
+        </div>}
+        {!fixedStatus && !error && applications.length > 0 && !applications.some(a => statusFilter === "all" || a.status === statusFilter) && (
           <div className="no-applications"><h2>No {statusFilter} applications</h2><p>Choose another status to see your work.</p><button type="button" className="internal-primary" onClick={() => setStatusFilter("all")}>Show all applications</button></div>
         )}
+        {fixedStatus && !error && visibleApplications.length === 0 && <div className="no-applications">
+          <h2>{fixedStatus === "accepted" ? "No accepted work right now." : "No completed work yet."}</h2>
+          <p>{fixedStatus === "accepted" ? "Your accepted applications will appear here." : "Your completed work and reviews will appear here."}</p>
+          <a href="/#jobs">Explore Work &rarr;</a>
+        </div>}
         <div className="applications-list">
 
-          {applications.filter(application => statusFilter === "all" || application.status === statusFilter).map((application) => (
+          {visibleApplications.map((application) => (
 
             <div
               className="application-card"
@@ -330,6 +336,11 @@ function MyApplications() {
 
                 </div>
 
+              </div>
+
+              <div className="workspace-work-details">
+                {application.work_date && <span>Date: {String(application.work_date).split("T")[0]}</span>}
+                <Link to={'/jobs/' + application.job_id}>View Work &rarr;</Link>
               </div>
 
               {/* PAYMENT + STATUS */}

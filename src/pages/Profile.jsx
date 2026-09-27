@@ -14,7 +14,7 @@ function syncSessionPhoto(url, token) {
   }
 }
 
-function Profile() {
+function Profile({ showBlockedUsers = true }) {
   const token =
     localStorage.getItem("kaamonToken");
 
@@ -608,7 +608,7 @@ useEffect(() => {
         </section>
 
 
-        <BlockedUsers />
+        {showBlockedUsers && <BlockedUsers />}
 
         {message && (
           <p className="profile-message">

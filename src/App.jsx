@@ -1,12 +1,14 @@
 import "./App.css";
 
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 
 import Home from "./pages/Home.jsx";
 import Navbar from "./components/Navbar.jsx";
 import JobDetails from "./pages/JobDetails.jsx";
 import Login from "./pages/Login.jsx";
 import Signup from "./pages/Signup.jsx";
+import DashboardLayout from "./pages/DashboardLayout.jsx";
+import BlockedUsers from "./components/BlockedUsers.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import PostWork from "./pages/PostWork.jsx";
 import EditWork from "./pages/EditWork.jsx";
@@ -60,8 +62,15 @@ function App() {
         {/* DASHBOARD */}
         <Route
           path="/dashboard"
-          element={<Dashboard />}
-        />
+          element={<DashboardLayout />}>
+          <Route index element={<Dashboard />} />
+          <Route path="posted" element={<MyJobs />} />
+          <Route path="applications" element={<MyApplications />} />
+          <Route path="accepted" element={<MyApplications fixedStatus="accepted" />} />
+          <Route path="completed" element={<MyApplications fixedStatus="completed" />} />
+          <Route path="profile" element={<Profile showBlockedUsers={false} />} />
+          <Route path="blocked" element={<main className="karviam-internal workspace-blocked"><BlockedUsers /></main>} />
+        </Route>
 
 
         {/* POST WORK */}
@@ -79,7 +88,7 @@ function App() {
          {/* MY JOBS */}
         <Route
             path="/my-jobs"
-             element={<MyJobs />}
+             element={<Navigate to="/dashboard/posted" replace />}
         />
 
          {/* JOBS APPLICANTS */}
@@ -91,11 +100,11 @@ function App() {
           {/* MyAPPLICANTS */}
         <Route
               path="/my-applications"
-               element={<MyApplications />}
+               element={<Navigate to="/dashboard/applications" replace />}
         />
          <Route
                path="/profile"
-               element={<Profile />}
+               element={<Navigate to="/dashboard/profile" replace />}
         />
         <Route
               path="/users/:userId"
