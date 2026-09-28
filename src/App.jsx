@@ -19,6 +19,7 @@ import Profile from "./pages/Profile.jsx";
 import UserProfile from "./pages/UserProfile.jsx";
 import Chat from "./pages/Chat";
 import ForgotPassword from "./pages/ForgotPassword.jsx";
+import AdminModeration from "./pages/AdminModeration.jsx";
 
 function App() {
   return (
@@ -30,6 +31,7 @@ function App() {
 
         {/* HOME PAGE */}
        <Route path="/" element={<Home />} />
+       <Route path="/admin" element={<AdminModeration />} />
 
 
         {/* JOB DETAILS PAGE */}

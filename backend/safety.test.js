@@ -75,6 +75,34 @@ const jobTarget = { match: /SELECT id, posted_by_id FROM jobs/, rows: [{ id: '9'
 const relation = blocked => ({ match: /SELECT EXISTS .*blocker_id = \$1 AND blocked_user_id = \$2.*blocker_id = \$2 AND blocked_user_id = \$1/, rows: [{ blocked }] });
 const application = status => ({ match: /FROM applications/, rows: [{ id: '8', applicant_id: '1', posted_by_id: '2', status }] });
 
+test('own profile returns the database admin flag using only authenticated identity', async () => {
+  for (const is_admin of [true, false]) {
+    const h = harness([{
+      match: /^SELECT id, name, email, phone, location, skills, profile_picture_url, is_admin FROM users WHERE id = \$1$/,
+      params: ['1'], rows: [{ id: '1', name: 'Member', is_admin }],
+    }]);
+    const result = await h.request('get', '/api/profile', { query: { userId: '24' } });
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.data.is_admin, is_admin);
+  }
+});
+
+test('own profile rejects anonymous users', async () => {
+  const h = harness();
+  assert.equal((await h.request('get', '/api/profile', { authenticated: false })).statusCode, 401);
+  assert.equal(h.calls.length, 0);
+});
+
+test('public profiles neither select nor expose admin status', async () => {
+  const h = harness([
+    { match: /FROM users WHERE id = \$1/, params: ['2'], inspect(sql) { assert.doesNotMatch(sql, /is_admin/); }, rows: [{ id: '2', name: 'Member', is_admin: true }] },
+    relation(false), { match: /SELECT 1 FROM user_blocks/, rows: [] },
+  ]);
+  const result = await h.request('get', '/api/users/:id/profile', { params: { id: '2' } });
+  assert.equal(result.statusCode, 200);
+  assert.equal(Object.hasOwn(result.data, 'is_admin'), false);
+});
+
 test('every safety route rejects unauthenticated requests', async () => {
   for (const [method, route] of [['post', '/api/reports/users/:targetId'], ['post', '/api/reports/jobs/:targetId'], ['get', '/api/blocks'], ['post', '/api/blocks/:userId'], ['delete', '/api/blocks/:userId']]) {
     const h = harness();

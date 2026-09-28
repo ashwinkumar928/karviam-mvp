@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Navigate, Outlet, useLocation } from "react-router-dom";
 import UserAvatar from "../components/UserAvatar";
+import API_URL from "../api";
 import "./Dashboard.css";
 
 const sections = [
@@ -20,6 +21,11 @@ function readUser() {
 
 export default function DashboardLayout() {
   const [user, setUser] = useState(readUser);
+  const [adminProfile, setAdminProfile] = useState(null);
+  const token = localStorage.getItem("kaamonToken");
+  const userId = user?.id;
+  // Only use the profile fetched for this session, never a cached local role.
+  const isAdmin = adminProfile?.token === token && adminProfile?.userId === userId && adminProfile?.is_admin === true;
   const [drawerOpen, setDrawerOpen] = useState(false);
   const drawer = useRef(null);
   const menuButton = useRef(null);
@@ -31,6 +37,28 @@ export default function DashboardLayout() {
     window.addEventListener("kaamonAuthChanged", update);
     return () => window.removeEventListener("kaamonAuthChanged", update);
   }, []);
+
+  useEffect(() => {
+    if (!token || userId == null) return;
+    const controller = new AbortController();
+    async function loadAdminStatus() {
+      try {
+        const response = await fetch(`${API_URL}/api/profile`, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error('Could not load profile');
+        const profile = await response.json();
+        if (controller.signal.aborted) return;
+        setAdminProfile({ token, userId, is_admin: String(profile.id) === String(userId) && profile.is_admin === true });
+      } catch {
+        // Discovery failure must not reveal admin navigation or disrupt the dashboard.
+        if (!controller.signal.aborted) setAdminProfile(null);
+      }
+    }
+    loadAdminStatus();
+    return () => controller.abort();
+  }, [token, userId]);
 
   useEffect(() => {
     const element = drawer.current;
@@ -68,6 +96,12 @@ export default function DashboardLayout() {
             <span aria-hidden="true">{icon}</span>{title}
           </NavLink>
         </div>)}
+        {isAdmin && <div>
+          <p className="workspace-account">Admin</p>
+          <NavLink to="/admin" onClick={() => setDrawerOpen(false)}>
+            <span aria-hidden="true">🛡</span>Admin Moderation
+          </NavLink>
+        </div>}
       </nav>
     </>;
   }

@@ -1904,7 +1904,8 @@ app.get(
           phone,
           location,
           skills,
-          profile_picture_url
+          profile_picture_url,
+          is_admin
         FROM users
         WHERE id = $1
         `,
