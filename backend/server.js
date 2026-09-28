@@ -3,6 +3,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const pool = require("./db");
+const { registerAdminRoutes } = require("./admin");
 const { registerSafetyRoutes, usersBlockedBetween, lockSafetyWrites, validId } = require("./safety");
 const { notificationService } = require("./notifications");
 const { createNotification, registerRoutes: registerNotificationRoutes } = notificationService(pool);
@@ -69,6 +70,7 @@ app.get("/", (req, res) => {
 registerNotificationRoutes(app, authenticateToken);
 registerPhotoRoutes(app, authenticateToken, pool);
 registerSafetyRoutes(app, authenticateToken, pool);
+registerAdminRoutes(app, authenticateToken, pool);
 
 
 // ==============================
@@ -103,6 +105,7 @@ app.get("/api/jobs", async (req, res) => {
   FROM jobs
 
   WHERE jobs.cancelled = FALSE
+  AND jobs.moderation_status <> 'removed'
   AND jobs.work_date >= CURRENT_DATE
 
   AND NOT EXISTS (
@@ -167,6 +170,10 @@ app.get("/api/jobs/:id",
     }
 
     const job = result.rows[0];
+
+    if (job.moderation_status === 'removed') {
+      return res.status(404).json({ error: 'Work not available' });
+    }
 
     res.json({
       id: job.id,
@@ -1055,6 +1062,9 @@ app.post(
         });
       }
       const job = jobResult.rows[0];
+      if (job.moderation_status === 'removed') {
+        return res.status(403).json({ message: 'This work is no longer available.' });
+      }
       if (await usersBlockedBetween(client, applicantId, job.posted_by_id)) {
         return res.status(403).json({ message: "This work is not available for interaction." });
       }
