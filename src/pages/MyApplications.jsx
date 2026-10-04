@@ -275,7 +275,7 @@ function MyApplications({ fixedStatus }) {
           !fixedStatus && applications.length === 0 && (
             <div className="no-applications">
 
-              <span className="internal-empty-icon" aria-hidden="true">&nearr;</span>
+              <span className="internal-empty-icon" aria-hidden="true">↗</span>
               <h2>No applications yet</h2>
 
               <p>
