@@ -1100,7 +1100,7 @@ if (filledResult.rows.length > 0) {
       const existingApplication =
         await client.query(
           `
-          SELECT id
+          SELECT id, status
           FROM applications
           WHERE job_id = $1
           AND applicant_id = $2
@@ -1110,7 +1110,9 @@ if (filledResult.rows.length > 0) {
 
       if (existingApplication.rows.length > 0) {
         return res.status(409).json({
-          message: "You already applied for this job.",
+          message: existingApplication.rows[0].status === "withdrawn"
+            ? "You previously withdrew your application for this work."
+            : "You already applied for this job.",
         });
       }
 
@@ -1606,6 +1608,75 @@ app.get(
 // ==============================
 
 app.patch(
+  "/api/applications/:applicationId/withdraw",
+  authenticateToken,
+  async (req, res) => {
+    const applicationId = req.params.applicationId;
+    if (!validId(applicationId)) {
+      return res.status(400).json({ message: "Invalid application ID." });
+    }
+    let client;
+    let committed = false;
+    try {
+      client = await pool.connect();
+      await client.query("BEGIN");
+      await lockSafetyWrites(client);
+      // Match acceptance/cancellation lock order: safety lock, job, application.
+      const jobResult = await client.query(
+        `SELECT jobs.id, jobs.posted_by_id, jobs.title
+         FROM jobs JOIN applications ON applications.job_id = jobs.id
+         WHERE applications.id = $1 FOR UPDATE OF jobs`,
+        [applicationId]
+      );
+      if (!jobResult.rows.length) {
+        return res.status(404).json({ message: "Application not found." });
+      }
+      const current = await client.query(
+        "SELECT id, applicant_id, status FROM applications WHERE id = $1 FOR UPDATE",
+        [applicationId]
+      );
+      const application = current.rows[0];
+      if (!application) return res.status(404).json({ message: "Application not found." });
+      if (String(application.applicant_id) !== String(req.user.id)) {
+        return res.status(403).json({ message: "You cannot withdraw this application." });
+      }
+      if (application.status === "withdrawn") {
+        return res.json({ message: "Application already withdrawn", application: { id: application.id, status: "withdrawn" } });
+      }
+      if (application.status !== "pending") {
+        return res.status(400).json({ message: "This application can no longer be withdrawn." });
+      }
+      const result = await client.query(
+        `UPDATE applications SET status = 'withdrawn'
+         WHERE id = $1 AND applicant_id = $2 AND status = 'pending'
+         RETURNING id, status`,
+        [applicationId, req.user.id]
+      );
+      if (result.rows.length !== 1) {
+        return res.status(400).json({ message: "This application can no longer be withdrawn." });
+      }
+      await client.query("COMMIT");
+      committed = true;
+      res.json({ message: "Application withdrawn successfully", application: result.rows[0] });
+      const job = jobResult.rows[0];
+      void createNotification(job.posted_by_id, "application_withdrawn", "Application withdrawn",
+        `{actor} withdrew their application for ${job.title}.`, `/jobs/${job.id}/applicants`, req.user.id);
+    } catch (error) {
+      console.error("Withdraw application error:", error);
+      res.status(500).json({ message: "Could not withdraw application. Please try again." });
+    } finally {
+      if (client) {
+        try {
+          if (!committed) await client.query("ROLLBACK");
+        } finally {
+          client.release();
+        }
+      }
+    }
+  }
+);
+
+app.patch(
   "/api/applications/:id/status",
   authenticateToken,
   async (req, res) => {
@@ -1674,6 +1745,11 @@ app.patch(
         return res.status(403).json({ message: "This work is not available for interaction." });
       }
 
+      if (application.status === "withdrawn" ||
+          (status === "accepted" && application.status !== "pending")) {
+        return res.status(400).json({ message: "This application is no longer available." });
+      }
+
         if (
      status === "completed" && application.status !== "accepted"
      ) {
@@ -1701,11 +1777,17 @@ app.patch(
         SET status = $1
 
         WHERE id = $2
+        AND ($1 <> 'accepted' OR status = 'pending')
+        AND status <> 'withdrawn'
 
         RETURNING *
         `,
         [status, applicationId]
       );
+
+      if (result.rows.length !== 1) {
+        return res.status(400).json({ message: "This application is no longer available." });
+      }
 
       await client.query("COMMIT");
       committed = true;
@@ -2516,7 +2598,8 @@ app.get(
         : application.worker_name;
 
       res.json({
-        messagingAvailable: !await usersBlockedBetween(pool, application.applicant_id, application.posted_by_id),
+        messagingAvailable: ["accepted", "completed"].includes(application.status) &&
+          !await usersBlockedBetween(pool, application.applicant_id, application.posted_by_id),
         partnerName,
         jobTitle: application.job_title,
         location: application.location,

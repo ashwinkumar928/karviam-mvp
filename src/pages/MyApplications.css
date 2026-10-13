@@ -161,6 +161,35 @@
   color: #c93636;
 }
 
+.withdraw-application-btn {
+  padding: 8px 12px;
+  border: 1px solid #e9d4d4;
+  border-radius: 9px;
+  color: #a04444;
+  background: #fffafa;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.my-applications-page .workspace-work-details {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.withdraw-application-btn:focus-visible {
+  outline: 2px solid #547d72;
+  outline-offset: 3px;
+}
+
+body.dark-mode .withdraw-application-btn {
+  color: #f2b8b8;
+  background: #302329;
+  border-color: #6b4444;
+}
+
 .no-applications {
   padding: 45px;
 

@@ -75,6 +75,107 @@ const jobTarget = { match: /SELECT id, posted_by_id FROM jobs/, rows: [{ id: '9'
 const relation = blocked => ({ match: /SELECT EXISTS .*blocker_id = \$1 AND blocked_user_id = \$2.*blocker_id = \$2 AND blocked_user_id = \$1/, rows: [{ blocked }] });
 const application = status => ({ match: /FROM applications/, rows: [{ id: '8', applicant_id: '1', posted_by_id: '2', status }] });
 
+const withdrawRoute = '/api/applications/:applicationId/withdraw';
+const withdrawalJob = () => ({ match: /FOR UPDATE OF jobs/, rows: [{ id: '9', posted_by_id: '2', title: 'Garden work' }] });
+const withdrawalRequest = { params: { applicationId: '8' }, body: { applicant_id: '99' } };
+
+test('withdrawal requires authentication and a valid ID', async () => {
+  assert.equal((await harness().request('patch', withdrawRoute, { authenticated: false })).statusCode, 401);
+  assert.equal((await harness().request('patch', withdrawRoute, { params: { applicationId: 'bad' } })).statusCode, 400);
+});
+
+test('pending withdrawal preserves history, targets only the owned row, and notifies only the hirer once', async () => {
+  const h = harness([withdrawalJob(), application('pending'), {
+    match: /^UPDATE applications SET status = 'withdrawn' WHERE id = \$1 AND applicant_id = \$2 AND status = 'pending' RETURNING id, status$/,
+    params: ['8', '1'], rows: [{ id: '8', status: 'withdrawn' }],
+  }]);
+  const result = await h.request('patch', withdrawRoute, withdrawalRequest);
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.data.application.status, 'withdrawn');
+  assert.deepEqual(Object.keys(result.data.application).sort(), ['id', 'status']);
+  assert.equal(h.calls.filter(c => c.text.startsWith('UPDATE')).length, 1);
+  assert.ok(!h.calls.some(c => /DELETE|UPDATE jobs/.test(c.text)));
+  assert.ok(h.calls.some(c => c.text === 'COMMIT'));
+  assert.deepEqual(h.notifications, [['2', 'application_withdrawn', 'Application withdrawn',
+    '{actor} withdrew their application for Garden work.', '/jobs/9/applicants', '1']]);
+  const retry = harness([withdrawalJob(), application('withdrawn')]);
+  assert.equal((await retry.request('patch', withdrawRoute, withdrawalRequest)).data.message, 'Application already withdrawn');
+  assert.equal(retry.notifications.length, 0);
+});
+
+test('another user cannot withdraw even with a forged applicant ID', async () => {
+  const h = harness([withdrawalJob(), { match: /FROM applications/, rows: [{ id: '8', applicant_id: '2', status: 'pending' }] }]);
+  const result = await h.request('patch', withdrawRoute, withdrawalRequest);
+  assert.equal(result.statusCode, 403);
+  assert.equal(result.data.message, 'You cannot withdraw this application.');
+  assert.equal(h.notifications.length, 0);
+});
+
+for (const status of ['accepted', 'rejected', 'completed']) {
+  test(`${status} cannot be withdrawn`, async () => {
+    const h = harness([withdrawalJob(), application(status)]);
+    const result = await h.request('patch', withdrawRoute, withdrawalRequest);
+    assert.equal(result.statusCode, 400);
+    assert.equal(result.data.message, 'This application can no longer be withdrawn.');
+    assert.ok(h.calls.some(c => c.text === 'ROLLBACK'));
+    assert.equal(h.notifications.length, 0);
+  });
+}
+
+test('withdrawal handles missing rows and a lost conditional update without notifications', async () => {
+  const missing = harness([{ match: /FOR UPDATE OF jobs/ }]);
+  assert.equal((await missing.request('patch', withdrawRoute, withdrawalRequest)).statusCode, 404);
+  const raced = harness([withdrawalJob(), application('pending'), { match: /UPDATE applications.*status = 'pending'/ }]);
+  assert.equal((await raced.request('patch', withdrawRoute, withdrawalRequest)).statusCode, 400);
+  assert.equal(raced.notifications.length, 0);
+  assert.ok(raced.calls.some(c => c.text === 'ROLLBACK'));
+});
+
+for (const status of ['withdrawn', 'accepted', 'completed', 'rejected', 'pending']) {
+  test(`acceptance requires pending status: ${status}`, async () => {
+    const steps = [
+      { match: /FOR UPDATE OF jobs/, rows: [{ id: '9', posted_by_id: '1' }] },
+      { match: /FROM applications/, rows: [{ id: '8', applicant_id: '2', posted_by_id: '1', status }] }, relation(false),
+    ];
+    if (status === 'pending') steps.push({ match: /UPDATE applications.*AND \(\$1 <> 'accepted' OR status = 'pending'\).*AND status <> 'withdrawn'/, rows: [{ id: '8', status: 'accepted' }] });
+    const h = harness(steps);
+    assert.equal((await h.request('patch', '/api/applications/:id/status', { params: { id: '8' }, body: { status: 'accepted' } })).statusCode, status === 'pending' ? 200 : 400);
+  });
+}
+
+test('withdrawn applications cannot be rejected or completed by a hirer', async () => {
+  for (const status of ['rejected', 'completed']) {
+    const h = harness([
+      { match: /FOR UPDATE OF jobs/, rows: [{ id: '9', posted_by_id: '1' }] },
+      { match: /FROM applications/, rows: [{ id: '8', applicant_id: '2', posted_by_id: '1', status: 'withdrawn' }] },
+    ]);
+    assert.equal((await h.request('patch', '/api/applications/:id/status', { params: { id: '8' }, body: { status } })).statusCode, 400);
+  }
+});
+
+test('withdrawn applications cannot access chat or submit reviews', async () => {
+  const info = harness([application('withdrawn')]);
+  const metadata = await info.request('get', '/api/applications/:id/chat-info', { params: { id: '8' } });
+  assert.equal(metadata.data.messagingAvailable, false);
+  for (const method of ['get', 'post']) {
+    const h = harness([application('withdrawn')]);
+    assert.equal((await h.request(method, '/api/applications/:id/messages', { params: { id: '8' }, body: { message: 'Hello' } })).statusCode, 403);
+  }
+  const h = harness([application('withdrawn')]);
+  assert.equal((await h.request('post', '/api/reviews', { body: { applicationId: '8', rating: 5 } })).statusCode, 400);
+});
+
+test('withdrawn applications cannot reapply or create duplicate rows', async () => {
+  const h = harness([
+    { match: /SELECT \* FROM jobs.*FOR UPDATE/, rows: [{ id: '9', posted_by_id: '2' }] },
+    relation(false), { match: /FROM applications.*status IN/ },
+    { match: /SELECT id, status FROM applications.*applicant_id/, rows: [{ id: '8', status: 'withdrawn' }] },
+  ]);
+  const result = await h.request('post', '/api/jobs/:id/apply', { params: { id: '9' } });
+  assert.equal(result.statusCode, 409);
+  assert.equal(result.data.message, 'You previously withdrew your application for this work.');
+});
+
 test('own profile returns the database admin flag using only authenticated identity', async () => {
   for (const is_admin of [true, false]) {
     const h = harness([{

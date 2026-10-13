@@ -1,9 +1,62 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link, Navigate } from "react-router-dom";
 
 import API_URL from "../api";
 import "./MyApplications.css";
 import "./InternalPages.css";
+import "../components/SafetyActions.css";
+
+function WithdrawModal({ applicationId, token, onClose, onWithdrawn }) {
+  const dialog = useRef(null);
+  const submitting = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const previous = document.activeElement;
+    const element = dialog.current;
+    element.showModal();
+    return () => { element.close(); previous?.focus(); };
+  }, []);
+
+  async function submit(event) {
+    event.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/api/applications/${applicationId}/withdraw`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "Could not withdraw application.");
+      onWithdrawn(applicationId, data.application.status);
+    } catch (err) {
+      setError(err.message || "Could not connect to Karviam server.");
+    } finally {
+      submitting.current = false;
+      setBusy(false);
+    }
+  }
+
+  return createPortal(
+    <dialog ref={dialog} className="safety-modal" aria-labelledby="withdraw-title" aria-describedby="withdraw-description"
+      onCancel={event => { event.preventDefault(); if (!submitting.current) onClose(); }}>
+      <form onSubmit={submit}>
+        <h2 id="withdraw-title">Withdraw application?</h2>
+        <p id="withdraw-description">Your application will be withdrawn from this work opportunity. You can’t undo this action from here.</p>
+        {error && <p role="alert" className="safety-error">{error}</p>}
+        <div className="safety-buttons">
+          <button type="button" autoFocus disabled={busy} onClick={onClose}>Cancel</button>
+          <button type="submit" className="safety-danger" disabled={busy}>{busy ? "Withdrawing…" : "Withdraw Application"}</button>
+        </div>
+      </form>
+    </dialog>, document.body
+  );
+}
 
 function MyApplications({ fixedStatus }) {
   const token = localStorage.getItem("kaamonToken");
@@ -12,6 +65,9 @@ function MyApplications({ fixedStatus }) {
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  const [withdrawApplicationId, setWithdrawApplicationId] = useState(null);
+  const [withdrawMessage, setWithdrawMessage] = useState("");
 
   const [reviewRatings, setReviewRatings] = useState({});
   const [reviewComments, setReviewComments] = useState({});
@@ -243,6 +299,17 @@ function MyApplications({ fixedStatus }) {
   return (
     <main className="my-applications-page karviam-internal">
 
+      {withdrawApplicationId !== null && <WithdrawModal
+        applicationId={withdrawApplicationId}
+        token={token}
+        onClose={() => setWithdrawApplicationId(null)}
+        onWithdrawn={(id, status) => {
+          setApplications(current => current.map(application => application.application_id === id ? { ...application, status } : application));
+          setWithdrawApplicationId(null);
+          setWithdrawMessage("Application withdrawn successfully.");
+        }}
+      />}
+
       <div className="my-applications-container">
 
         <Link
@@ -291,10 +358,11 @@ function MyApplications({ fixedStatus }) {
           )}
 
         {!fixedStatus && <div className="internal-filter-tabs" role="group" aria-label="Filter applications by status">
-          {["all", "pending", "accepted", "completed", "rejected"].map((status) => (
+          {["all", "pending", "accepted", "completed", "rejected", "withdrawn"].map((status) => (
             <button type="button" key={status} aria-pressed={statusFilter === status} onClick={() => setStatusFilter(status)}>{status}</button>
           ))}
         </div>}
+        {withdrawMessage && <p role="status">{withdrawMessage}</p>}
         {!fixedStatus && !error && applications.length > 0 && !applications.some(a => statusFilter === "all" || a.status === statusFilter) && (
           <div className="no-applications"><h2>No {statusFilter} applications</h2><p>Choose another status to see your work.</p><button type="button" className="internal-primary" onClick={() => setStatusFilter("all")}>Show all applications</button></div>
         )}
@@ -341,6 +409,10 @@ function MyApplications({ fixedStatus }) {
               <div className="workspace-work-details">
                 {application.work_date && <span>Date: {String(application.work_date).split("T")[0]}</span>}
                 <Link to={'/jobs/' + application.job_id}>View Work &rarr;</Link>
+                {application.status === "pending" && <button
+                  type="button" className="withdraw-application-btn"
+                  onClick={() => { setWithdrawMessage(""); setWithdrawApplicationId(application.application_id); }}
+                >Withdraw Application</button>}
               </div>
 
               {/* PAYMENT + STATUS */}
