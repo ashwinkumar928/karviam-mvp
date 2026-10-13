@@ -1,0 +1,12 @@
+.save-work-control { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.save-work-control .save-work-button { display: inline-flex; align-items: center; gap: 5px; padding: 8px 11px; min-height: 36px; border: 1px solid #dbe5df; border-radius: 9px; background: #fff; color: #53645c; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.save-work-control .save-work-button.is-saved { color: #0f6b57; border-color: #b8d3c8; background: #eaf5ef; }
+.save-work-control .save-work-button:disabled { opacity: .6; cursor: wait; }
+.save-work-button:focus-visible { outline: 2px solid #0f6b57; outline-offset: 3px; }
+.save-work-control small, .saved-work-feedback { color: #53645c; font-size: 12px; line-height: 1.5; }
+.saved-work-feedback button { font: inherit; color: #0f6b57; border: 0; background: transparent; text-decoration: underline; cursor: pointer; }
+.nearby-jobs .save-work-control { margin-top: 12px; }
+.listing-action-panel > .save-work-control { margin-top: 12px; }
+body.dark-mode .save-work-control .save-work-button { background: #172033; color: #cbd5e1; border-color: #475569; }
+body.dark-mode .save-work-control .save-work-button.is-saved { background: #153b2a; color: #9bdac1; border-color: #417363; }
+body.dark-mode .save-work-control small, body.dark-mode .saved-work-feedback { color: #cbd5e1; }

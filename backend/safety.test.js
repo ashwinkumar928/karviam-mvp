@@ -75,6 +75,126 @@ const jobTarget = { match: /SELECT id, posted_by_id FROM jobs/, rows: [{ id: '9'
 const relation = blocked => ({ match: /SELECT EXISTS .*blocker_id = \$1 AND blocked_user_id = \$2.*blocker_id = \$2 AND blocked_user_id = \$1/, rows: [{ blocked }] });
 const application = status => ({ match: /FROM applications/, rows: [{ id: '8', applicant_id: '1', posted_by_id: '2', status }] });
 
+const saveRoute = '/api/jobs/:jobId/save';
+const saveRequest = { params: { jobId: '9' }, body: { user_id: '99' }, query: { user_id: '99' } };
+const saveTarget = (changes = {}) => ({
+  match: /^SELECT id, posted_by_id, cancelled, moderation_status FROM jobs WHERE id = \$1 FOR UPDATE$/,
+  params: ['9'], rows: [{ id: '9', posted_by_id: '2', cancelled: false, moderation_status: 'active', ...changes }],
+});
+
+test('all saved-work routes require authentication; mutation IDs are validated', async () => {
+  for (const [method, route] of [['post', saveRoute], ['delete', saveRoute], ['get', '/api/saved-jobs']]) {
+    const h = harness();
+    assert.equal((await h.request(method, route, { authenticated: false })).statusCode, 401);
+    assert.equal(h.calls.length, 0);
+  }
+  for (const method of ['post', 'delete']) {
+    for (const jobId of ['bad', '0', '-1', '9223372036854775808']) {
+      assert.equal((await harness().request(method, saveRoute, { params: { jobId } })).statusCode, 400);
+    }
+  }
+});
+
+for (const duplicate of [false, true]) {
+  test(`saving work uses authenticated identity and handles duplicate=${duplicate}`, async () => {
+    const h = harness([saveTarget(), relation(false), {
+      match: /^INSERT INTO saved_jobs \(user_id, job_id\) VALUES \(\$1, \$2\) ON CONFLICT \(user_id, job_id\) DO NOTHING RETURNING id$/,
+      params: ['1', '9'], rows: duplicate ? [] : [{ id: '20' }],
+    }]);
+    const result = await h.request('post', saveRoute, saveRequest);
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.data.saved, true);
+    assert.equal(result.data.message, duplicate ? 'Work already saved' : 'Work saved');
+    assert.ok(h.calls.findIndex(c => c.text.includes('pg_advisory_xact_lock')) < h.calls.findIndex(c => c.text.includes('FOR UPDATE')));
+    assert.ok(h.calls.some(c => c.text === 'COMMIT'));
+    assert.equal(h.notifications.length, 0);
+    assert.ok(!h.calls.some(c => /UPDATE applications|UPDATE jobs/.test(c.text)));
+  });
+}
+
+for (const [reason, changes] of [
+  ['own job', { posted_by_id: '1' }],
+  ['removed job', { moderation_status: 'removed' }],
+  ['cancelled job', { cancelled: true }],
+]) {
+  test(`cannot save ${reason}`, async () => {
+    const h = harness([saveTarget(changes)]);
+    assert.equal((await h.request('post', saveRoute, saveRequest)).statusCode, 400);
+    assert.ok(h.calls.some(c => c.text === 'ROLLBACK'));
+    assert.ok(!h.calls.some(c => c.text.startsWith('INSERT')));
+  });
+}
+
+test('cannot save missing work or work blocked in either direction', async () => {
+  const missing = harness([{ ...saveTarget(), rows: [] }]);
+  assert.equal((await missing.request('post', saveRoute, saveRequest)).statusCode, 404);
+  const blocked = harness([saveTarget(), { ...relation(true), params: ['1', '2'] }]);
+  assert.equal((await blocked.request('post', saveRoute, saveRequest)).statusCode, 403);
+});
+
+test('failed save rolls back and hides database details', async () => {
+  const h = harness([saveTarget(), relation(false), { match: /INSERT INTO saved_jobs/, error: Error('secret database details') }]);
+  const result = await h.request('post', saveRoute, saveRequest);
+  assert.equal(result.statusCode, 500);
+  assert.doesNotMatch(result.data.message, /secret/);
+  assert.ok(h.calls.some(c => c.text === 'ROLLBACK'));
+  assert.equal(h.calls.at(-1).text, 'RELEASE');
+});
+
+for (const alreadyUnsaved of [false, true]) {
+  test(`unsave scopes deletion to authenticated user and job; already unsaved=${alreadyUnsaved}`, async () => {
+    const h = harness([{
+      match: /^DELETE FROM saved_jobs WHERE user_id = \$1 AND job_id = \$2$/,
+      params: ['1', '9'], rows: alreadyUnsaved ? [] : [{ id: '20' }],
+    }]);
+    const result = await h.request('delete', saveRoute, saveRequest);
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.data.saved, false);
+    assert.equal(h.calls.length, 1, 'Removing unavailable/blocked history needs no job availability check');
+  });
+}
+
+test('saved list scopes to authenticated user, projects public data and keeps unavailable history', async () => {
+  const h = harness([{
+    match: /FROM saved_jobs JOIN jobs ON jobs.id = saved_jobs.job_id WHERE saved_jobs.user_id = \$1 ORDER BY saved_jobs.created_at DESC, saved_jobs.id DESC$/,
+    params: ['1'],
+    inspect(sql) {
+      assert.doesNotMatch(sql, /SELECT \*|email|phone|password|SELECT users/);
+      assert.match(sql, /NOT jobs.cancelled AND jobs.moderation_status <> 'removed'/);
+      assert.match(sql, /jobs.work_date >= CURRENT_DATE/);
+      assert.match(sql, /applications.status IN \('accepted', 'completed'\)/);
+      assert.match(sql, /b.blocker_id = \$1 AND b.blocked_user_id::text = jobs.posted_by_id::text/);
+      assert.match(sql, /b.blocked_user_id = \$1 AND b.blocker_id::text = jobs.posted_by_id::text/);
+      assert.match(sql, /AS available/);
+    },
+    rows: [{ id: '9', title: 'Available work', available: true }, { id: '10', title: 'Historical work', available: false }],
+  }]);
+  const result = await h.request('get', '/api/saved-jobs', { query: { user_id: '99' }, body: { user_id: '99' } });
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.data.length, 2);
+  assert.equal(result.data[1].available, false);
+});
+
+test('saved-work read/delete errors return safe responses', async () => {
+  for (const [method, route, match] of [['get', '/api/saved-jobs', /FROM saved_jobs/], ['delete', saveRoute, /DELETE FROM saved_jobs/]]) {
+    const h = harness([{ match, error: Error('secret database details') }]);
+    const result = await h.request(method, route, saveRequest);
+    assert.equal(result.statusCode, 500);
+    assert.doesNotMatch(result.data.message, /secret/);
+  }
+});
+
+test('manual saved-jobs schema declares cascade FKs, uniqueness and backend-only access', () => {
+  // Verify the migration contract without executing SQL against the user's database.
+  const sql = fs.readFileSync(path.join(__dirname, 'sql/saved-jobs.sql'), 'utf8');
+  assert.match(sql, /user_id BIGINT NOT NULL REFERENCES public.users\(id\) ON DELETE CASCADE/);
+  assert.match(sql, /job_id BIGINT NOT NULL REFERENCES public.jobs\(id\) ON DELETE CASCADE/);
+  assert.match(sql, /UNIQUE \(user_id, job_id\)/);
+  assert.match(sql, /ENABLE ROW LEVEL SECURITY/);
+  assert.match(sql, /REVOKE ALL ON TABLE public.saved_jobs FROM anon, authenticated/);
+  assert.match(sql, /REVOKE ALL ON SEQUENCE public.saved_jobs_id_seq FROM anon, authenticated/);
+});
+
 const withdrawRoute = '/api/applications/:applicationId/withdraw';
 const withdrawalJob = () => ({ match: /FOR UPDATE OF jobs/, rows: [{ id: '9', posted_by_id: '2', title: 'Garden work' }] });
 const withdrawalRequest = { params: { applicationId: '8' }, body: { applicant_id: '99' } };

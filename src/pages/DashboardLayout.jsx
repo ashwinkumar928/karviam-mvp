@@ -8,6 +8,7 @@ const sections = [
   ["", "Overview", "Your Karviam activity at a glance.", "◫"],
   ["posted", "My Posted Work", "Manage your work posts and review applicants.", "▤"],
   ["applications", "My Applications", "Track the opportunities you have applied for.", "↗"],
+  ["saved", "Saved Work", "Work opportunities you saved for later.", "♡"],
   ["accepted", "Accepted Work", "Your accepted work and conversations with hirers.", "✓"],
   ["completed", "Completed Work", "Your work history and reviews.", "☑"],
   ["profile", "Profile", "Manage your details, skills and profile photo.", "○"],
@@ -90,8 +91,8 @@ export default function DashboardLayout() {
         <div><strong>{user.name}</strong><span>MY WORKSPACE</span></div>
       </div>
       <nav aria-label="Workspace">
-        {sections.map(([path, title, , icon], index) => <div key={path}>
-          {index === 5 && <p className="workspace-account">Account</p>}
+        {sections.map(([path, title, , icon]) => <div key={path}>
+          {path === "profile" && <p className="workspace-account">Account</p>}
           <NavLink end to={`/dashboard${path ? `/${path}` : ""}`} onClick={() => setDrawerOpen(false)}>
             <span aria-hidden="true">{icon}</span>{title}
           </NavLink>

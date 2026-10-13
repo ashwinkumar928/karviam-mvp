@@ -72,6 +72,89 @@ registerPhotoRoutes(app, authenticateToken, pool);
 registerSafetyRoutes(app, authenticateToken, pool);
 registerAdminRoutes(app, authenticateToken, pool);
 
+// Saved work belongs to the authenticated user, independently of applications.
+app.post("/api/jobs/:jobId/save", authenticateToken, async (req, res) => {
+  const jobId = req.params.jobId;
+  if (!validId(jobId)) return res.status(400).json({ message: "Invalid job ID." });
+  let client;
+  let committed = false;
+  try {
+    client = await pool.connect();
+    await client.query("BEGIN");
+    await lockSafetyWrites(client);
+    const result = await client.query(
+      "SELECT id, posted_by_id, cancelled, moderation_status FROM jobs WHERE id = $1 FOR UPDATE",
+      [jobId]
+    );
+    const job = result.rows[0];
+    if (!job) return res.status(404).json({ message: "Job not found." });
+    if (job.moderation_status === "removed" || job.cancelled) {
+      return res.status(400).json({ message: "This work is no longer available to save." });
+    }
+    if (String(job.posted_by_id) === String(req.user.id)) {
+      return res.status(400).json({ message: "You cannot save your own work." });
+    }
+    if (await usersBlockedBetween(client, req.user.id, job.posted_by_id)) {
+      return res.status(403).json({ message: "This work is not available for interaction." });
+    }
+    const saved = await client.query(
+      `INSERT INTO saved_jobs (user_id, job_id) VALUES ($1, $2)
+       ON CONFLICT (user_id, job_id) DO NOTHING RETURNING id`,
+      [req.user.id, jobId]
+    );
+    await client.query("COMMIT");
+    committed = true;
+    res.json({ message: saved.rows.length ? "Work saved" : "Work already saved", saved: true });
+  } catch (error) {
+    console.error("Save work error:", error);
+    res.status(500).json({ message: "Could not save work. Please try again." });
+  } finally {
+    if (client) {
+      try { if (!committed) await client.query("ROLLBACK"); }
+      finally { client.release(); }
+    }
+  }
+});
+
+app.delete("/api/jobs/:jobId/save", authenticateToken, async (req, res) => {
+  if (!validId(req.params.jobId)) return res.status(400).json({ message: "Invalid job ID." });
+  try {
+    // No availability check: users can always remove their own historical saves.
+    await pool.query("DELETE FROM saved_jobs WHERE user_id = $1 AND job_id = $2", [req.user.id, req.params.jobId]);
+    res.json({ message: "Work removed from saved", saved: false });
+  } catch (error) {
+    console.error("Unsave work error:", error);
+    res.status(500).json({ message: "Could not remove saved work. Please try again." });
+  }
+});
+
+app.get("/api/saved-jobs", authenticateToken, async (req, res) => {
+  try {
+    // Keep unavailable work as history; select only public job data, never contacts.
+    const result = await pool.query(`
+      SELECT jobs.id, jobs.icon, jobs.title, jobs.category, jobs.description,
+        jobs.location, jobs.work_date, jobs.work_time, jobs.payment, jobs.distance,
+        jobs.posted_by_id, jobs.posted_by_name, jobs.cancelled, jobs.moderation_status,
+        saved_jobs.created_at AS saved_at,
+        (NOT jobs.cancelled AND jobs.moderation_status <> 'removed'
+          AND jobs.work_date >= CURRENT_DATE
+          AND NOT EXISTS (SELECT 1 FROM applications
+            WHERE applications.job_id = jobs.id AND applications.status IN ('accepted', 'completed'))
+          AND NOT EXISTS (SELECT 1 FROM user_blocks b
+            WHERE (b.blocker_id = $1 AND b.blocked_user_id::text = jobs.posted_by_id::text)
+               OR (b.blocked_user_id = $1 AND b.blocker_id::text = jobs.posted_by_id::text))
+        ) AS available
+      FROM saved_jobs JOIN jobs ON jobs.id = saved_jobs.job_id
+      WHERE saved_jobs.user_id = $1
+      ORDER BY saved_jobs.created_at DESC, saved_jobs.id DESC
+    `, [req.user.id]);
+    res.json(result.rows);
+  } catch (error) {
+    console.error("Saved work error:", error);
+    res.status(500).json({ message: "Could not load saved work. Please try again." });
+  }
+});
+
 
 // ==============================
 // TEST DATABASE CONNECTION

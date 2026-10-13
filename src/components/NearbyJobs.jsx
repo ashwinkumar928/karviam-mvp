@@ -4,8 +4,11 @@ import { Link } from "react-router-dom";
 import "./NearbyJobs.css";
 import { readJobsCache, requestJobs } from "../api/requestArray";
 import workCategories from "../data/categories";
+import useSavedJobs from "../hooks/useSavedJobs";
+import SaveWorkButton from "./SaveWorkButton";
 
 function NearbyJobs({ filters, onFiltersChange } = {}) {
+  const savedWork = useSavedJobs();
   const [blockedIds, setBlockedIds] = useState([]);
   useEffect(() => {
     let active = true;
@@ -176,7 +179,7 @@ function NearbyJobs({ filters, onFiltersChange } = {}) {
             {hasJobs && loading && <span role="status">Refreshing...</span>}
             {hasJobs && loadError && <span role="status">Couldn't refresh opportunities.</span>}
             <button type="button" className="filter-btn" disabled={loading}
-              onClick={() => setAttempt((value) => value + 1)}>
+              onClick={() => { setAttempt((value) => value + 1); savedWork.refresh(); }}>
               {hasJobs && loadError ? "Try Again" : "Refresh"}
             </button>
           </div>
@@ -186,6 +189,7 @@ function NearbyJobs({ filters, onFiltersChange } = {}) {
       </div>
 
       {/* JOB CARDS */}
+      {savedWork.error && <p className="saved-work-feedback" role="status">Saved state unavailable: {savedWork.error} <button type="button" onClick={savedWork.refresh}>Retry</button></p>}
       <div className="jobs-grid" id="nearby-results">
 
         {!hasJobs && loading && Array.from({ length: 3 }, (_, index) => (
@@ -251,6 +255,7 @@ function NearbyJobs({ filters, onFiltersChange } = {}) {
                    View Work →
                 </Link>
               </div>
+              <SaveWorkButton jobId={job.id} postedById={job.postedBy?.id} savedWork={savedWork} />
 
             </div>
 

@@ -9,8 +9,11 @@ import {
 import "./JobDetails.css";
 import "./InternalPages.css";
 import API_URL from "../api";
+import useSavedJobs from "../hooks/useSavedJobs";
+import SaveWorkButton from "../components/SaveWorkButton";
 
 function JobDetails() {
+  const savedWork = useSavedJobs();
   const { jobId } = useParams();
   const navigate = useNavigate();
   function formatJobDate(dateValue) {
@@ -404,6 +407,9 @@ useEffect(() => {
 
           </div>
 
+
+          {!isOwnJob && <SaveWorkButton jobId={job.id} postedById={job.postedBy?.id} savedWork={savedWork} />}
+          {!isOwnJob && savedWork.error && <p className="saved-work-feedback" role="status">{savedWork.error} <button type="button" onClick={savedWork.refresh}>Retry saved work</button></p>}
 
           {!isOwnJob && applied && !applicationMessage && (
             <p className="application-message">

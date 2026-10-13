@@ -20,6 +20,7 @@ import UserProfile from "./pages/UserProfile.jsx";
 import Chat from "./pages/Chat";
 import ForgotPassword from "./pages/ForgotPassword.jsx";
 import AdminModeration from "./pages/AdminModeration.jsx";
+import SavedWork from "./pages/SavedWork.jsx";
 
 function App() {
   return (
@@ -68,6 +69,7 @@ function App() {
           <Route index element={<Dashboard />} />
           <Route path="posted" element={<MyJobs />} />
           <Route path="applications" element={<MyApplications />} />
+          <Route path="saved" element={<SavedWork />} />
           <Route path="accepted" element={<MyApplications fixedStatus="accepted" />} />
           <Route path="completed" element={<MyApplications fixedStatus="completed" />} />
           <Route path="profile" element={<Profile showBlockedUsers={false} />} />
